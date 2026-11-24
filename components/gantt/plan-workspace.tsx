@@ -259,6 +259,26 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
     scrollGantt();
   }
 
+  /**
+   * 「확인 필요」 항목을 눌렀을 때 갈 칸을 정한다.
+   * 칸이 적혀 있지 않은 안내(신규 제품 · 허용 호기 · 수량 부족 등)는 그 주문이 배정된 첫 칸, 그것도 없으면 그 제품이 들어 있는 첫 칸으로 간다.
+   */
+  function pickException(e: DraftException) {
+    const exists = (lineId: string, date: string) => Boolean(cells.get(key(lineId, date))?.productId);
+    if (e.lineId && e.date && exists(e.lineId, e.date)) return focusCell(e.lineId, e.date);
+    const order = e.orderId ? draftResult?.orders.find((o) => o.orderId === e.orderId) : null;
+    const assigned = order?.assignments.filter((a) => exists(a.lineId, a.date)) ?? [];
+    const onLine = assigned.find((a) => a.lineId === e.lineId) ?? assigned[0];
+    if (onLine) return focusCell(onLine.lineId, onLine.date);
+    if (e.productId) {
+      const mine = [...cells.values()].filter((c) => c.productId === e.productId).sort((a, b) => (a.lineId === e.lineId ? 0 : 1) - (b.lineId === e.lineId ? 0 : 1) || a.date.localeCompare(b.date));
+      if (mine[0]) return focusCell(mine[0].lineId, mine[0].date);
+    }
+    if (e.lineId && e.date) return focusCell(e.lineId, e.date);
+    if (e.code === "UNMATCHED_ORDER") return router.push("/orders");
+    window.alert("이 항목은 계획표에 배정된 칸이 없어 이동할 곳이 없습니다. (배정할 수 있는 호기가 없었거나, 이미 그 칸을 지운 경우입니다)");
+  }
+
   // ---- 초안 자동 생성 ----
   function applyDraft(r: DraftResult) {
     setCells(new Map(r.cells.map((c) => [key(c.lineId, c.date), c])));
@@ -620,7 +640,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
               <p className="rounded-[var(--radius-sm)] bg-info-bg px-2 py-1.5 text-text">
                 초안 셀 {draftResult.createdCount}개를 만들었습니다{draftResult.keptCount ? ` (기존 ${draftResult.keptCount}개 유지)` : ""}. 확인한 뒤 「확정 / 변경 저장」을 눌러야 확정됩니다.
               </p>
-              <ExceptionGroups exceptions={draftResult.exceptions} onPick={(e) => (e.lineId && e.date ? focusCell(e.lineId, e.date) : e.code === "UNMATCHED_ORDER" ? router.push("/orders") : undefined)} />
+              <ExceptionGroups exceptions={draftResult.exceptions} onPick={pickException} />
               <h3 className="px-1 pt-1 font-semibold text-brand-deep">주문별 결과</h3>
               {draftResult.orders.map((o) => (
                 <button
