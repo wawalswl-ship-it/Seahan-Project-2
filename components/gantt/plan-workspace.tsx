@@ -63,6 +63,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
   const [sideTab, setSideTab] = useState<"warnings" | "draft">("warnings");
   const [view, setView] = useState<"gantt" | "table">("gantt");
   const [focusKey, setFocusKey] = useState<string | null>(null);
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const movedRef = useRef(false);
@@ -244,7 +245,9 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
       el?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
     };
     setFocusKey(target);
-    setTimeout(() => setFocusKey(null), 2400);
+    // 앞서 누른 항목의 타이머가 방금 누른 항목의 강조를 지우지 않게 한다
+    if (focusTimer.current) clearTimeout(focusTimer.current);
+    focusTimer.current = setTimeout(() => setFocusKey(null), 4000);
     if (view === "table") {
       // 표에서 그 칸이 든 줄을 찾는다. 없으면(날짜 단위 경고 등) 일정표로 바꿔서 보여준다
       const row = target ? tableRef.current?.querySelector<HTMLElement>(`tr[data-run-cells~="${target}"]`) : null;
