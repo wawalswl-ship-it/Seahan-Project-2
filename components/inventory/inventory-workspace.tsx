@@ -1,6 +1,6 @@
 "use client";
 
-import { Notice } from "@/components/notice";
+import { Notice, type NoticeMsg } from "@/components/notice";
 import { useLeaveGuard } from "@/lib/hooks/use-leave-guard";
 import { flashRow } from "@/lib/hooks/flash-row";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -157,7 +157,7 @@ export function InventoryWorkspace({
   const [onlyNegative, setOnlyNegative] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ tone: "ok" | "danger"; text: string } | null>(notice ? { tone: "ok", text: notice } : null);
+  const [msg, setMsg] = useState<NoticeMsg | null>(notice ? { tone: "ok", text: notice } : null);
   // 주소에 붙어 온 안내(notice)는 한 번 보여준 뒤 주소에서 지운다(새로고침해도 다시 뜨지 않게)
   useEffect(() => {
     if (!notice) return;
@@ -229,7 +229,7 @@ export function InventoryWorkspace({
     const typed = raw.trim() === "" ? 0 : Number(raw.replace(/,/g, ""));
     if (Number.isFinite(typed) && typed < 0) {
       if (field === "opening") {
-        setMsg({ tone: "danger", text: `기초재고에는 음수를 넣을 수 없습니다 (입력값 ${typed.toLocaleString("ko-KR")}). 재고가 모자란 것은 생산·출고 수량으로 맞추세요.` });
+        setMsg({ tone: "danger", hideSeconds: 5, text: `기초재고에는 음수를 넣을 수 없습니다 (입력값 ${typed.toLocaleString("ko-KR")}). 재고가 모자란 것은 생산·출고 수량으로 맞추세요.` });
         setEditing(null);
         return;
       }
