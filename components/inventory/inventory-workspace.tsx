@@ -98,6 +98,8 @@ function sameRow(a: RowState, b: RowState): boolean {
 const th = "border-b border-r border-border bg-bg-sub px-1.5 py-1 text-[11px] font-semibold text-text-muted whitespace-nowrap";
 const td = "border-b border-r border-border px-1.5 py-0.5 text-xs whitespace-nowrap";
 const DIRTY = "bg-warn-bg";
+/** 방금 연결한 품목을 화면이 새로 그려지는 동안 넘겨 두는 곳 */
+const JUST_LINKED_KEY = "stock-just-linked";
 
 export function InventoryWorkspace({
   yearMonth,
@@ -155,6 +157,25 @@ export function InventoryWorkspace({
   }, [focusKey]);
   const [hideZero, setHideZero] = useState(false);
   const [onlyNegative, setOnlyNegative] = useState(false);
+  // 방금 「제품 자동 연결」로 연결한 품목. 연결 직후 화면이 새로 그려질 때 한 번 넘겨받아, 창과 표에서 초록색으로 보여준다
+  const [justLinked] = useState<{ ids: Set<string>; notice: string | null }>(() => {
+    const none = { ids: new Set<string>(), notice: null };
+    if (typeof window === "undefined") return none;
+    try {
+      const raw = window.sessionStorage.getItem(JUST_LINKED_KEY);
+      if (!raw) return none;
+      const v = JSON.parse(raw) as { ids: string[]; notice: string };
+      return { ids: new Set(v.ids), notice: v.notice };
+    } catch {
+      return none;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.sessionStorage.removeItem(JUST_LINKED_KEY);
+    } catch {}
+  }, []);
+  const [linkFilter, setLinkFilter] = useState<"all" | "linked" | "unlinked" | "just">("all");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<NoticeMsg | null>(notice ? { tone: "ok", text: notice } : null);
@@ -170,7 +191,7 @@ export function InventoryWorkspace({
   }, [notice]);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(() => justLinked.ids.size > 0);
   const tempSeq = useRef(0);
 
   const productById = useMemo(() => new Map(products.map((p) => [p.id, p] as const)), [products]);
@@ -200,9 +221,12 @@ export function InventoryWorkspace({
       if (q && !`${r.name} ${r.itemCode ?? ""}`.toLowerCase().includes(q)) return false;
       if (hideZero && totalsOf(r).current === 0 && !dirtyKeys.has(r.key)) return false;
       if (onlyNegative && !hasNegative(r)) return false;
+      if (linkFilter === "linked" && !r.productId) return false;
+      if (linkFilter === "unlinked" && r.productId) return false;
+      if (linkFilter === "just" && !(r.id && justLinked.ids.has(r.id))) return false;
       return true;
     });
-  }, [rows, search, hideZero, onlyNegative, dirtyKeys]);
+  }, [rows, search, hideZero, onlyNegative, dirtyKeys, linkFilter, justLinked]);
   const negativeCount = useMemo(() => rows.filter(hasNegative).length, [rows]);
 
   // 구간 → 호기 순서로 묶는다 (원본 표 순서 유지)
@@ -530,6 +554,15 @@ export function InventoryWorkspace({
             음수 있는 품목만 ({negativeCount})
           </label>
         ) : null}
+        <label className="flex items-center gap-1.5">
+          <span className="text-text-muted">제품 연결</span>
+          <select aria-label="제품 연결 보기" className={cx(inputSmClass, "w-48", linkFilter !== "all" && "border-ok bg-ok-bg font-semibold text-ok")} value={linkFilter} onChange={(e) => setLinkFilter(e.target.value as typeof linkFilter)}>
+            <option value="all">전체 보기</option>
+            <option value="linked">연결된 품목만 ({rows.filter((r) => r.productId).length})</option>
+            <option value="unlinked">연결 안 된 품목만 ({rows.filter((r) => !r.productId).length})</option>
+            {justLinked.ids.size ? <option value="just">방금 연결한 품목만 ({justLinked.ids.size})</option> : null}
+          </select>
+        </label>
         <div className="flex items-center gap-1.5">
           <Badge tone="neutral">품목 {rows.length}</Badge>
           <Badge tone="info">현재고 {fmtInt(grand.current)}</Badge>
@@ -717,6 +750,7 @@ export function InventoryWorkspace({
                                         safetyStock={p?.safetyStock ?? 0}
                                         planned={plannedByRow.get(r.key)}
                                         plannedFrom={from}
+                                        justLinked={Boolean(r.id && justLinked.ids.has(r.id))}
                                       />
                                     );
                                   })}
@@ -748,10 +782,19 @@ export function InventoryWorkspace({
           yearMonth={yearMonth}
           items={rows.filter((r) => r.id).map((r) => ({ id: r.id as string, name: r.name, section: r.section, machineLabel: r.machineLabel, productId: r.productId }))}
           products={products}
-          onClose={() => setLinkOpen(false)}
-          onDone={(text) => {
+          justLinked={justLinked.ids}
+          notice={justLinked.notice}
+          onClose={() => {
             setLinkOpen(false);
-            router.replace(`/inventory?ym=${yearMonth}&notice=${encodeURIComponent(text)}&t=${Date.now()}`);
+            // 방금 연결한 것이 있으면 창을 닫은 뒤 표에서도 그것만 모아 보여준다
+            if (justLinked.ids.size) setLinkFilter("just");
+          }}
+          onDone={(text, linkedIds) => {
+            // 연결한 뒤에도 창을 닫지 않는다: 화면을 새로 그린 뒤 이 창을 다시 열어 방금 연결한 품목을 그대로 보여준다
+            try {
+              window.sessionStorage.setItem(JUST_LINKED_KEY, JSON.stringify({ ids: linkedIds, notice: text }));
+            } catch {}
+            router.replace(`/inventory?ym=${yearMonth}&t=${Date.now()}`);
             router.refresh();
           }}
         />
@@ -813,9 +856,22 @@ interface RowProps {
   planned?: Record<number, number>;
   /** 이 날부터를 "예정"으로 본다 */
   plannedFrom: number;
+  /** 방금 「제품 자동 연결」로 연결한 품목인가 */
+  justLinked: boolean;
 }
 
-const Row = memo(function Row({ row, orig, dayList, canWrite, editingField, onEdit, onCommit, onRemove, onProduct, products, belowSafety, safetyStock, planned, plannedFrom }: RowProps) {
+/** 연결된 제품 이름. 연결됐다는 것이 한눈에 보이게 초록 체크를 붙이고, 방금 연결한 것은 「방금 연결」 표시를 단다 */
+function LinkedName({ name, just }: { name: string; just: boolean }) {
+  return (
+    <span className="font-medium text-ok">
+      <span aria-hidden>✓ </span>
+      {name}
+      {just ? <span className="ml-1 rounded-full bg-ok px-1.5 py-px text-[10px] font-bold text-white">방금 연결</span> : null}
+    </span>
+  );
+}
+
+const Row = memo(function Row({ row, orig, dayList, canWrite, editingField, onEdit, onCommit, onRemove, onProduct, products, belowSafety, safetyStock, planned, plannedFrom, justLinked }: RowProps) {
   const t = totalsOf(row);
   let plannedTotal = 0;
   if (planned) for (const [d, q] of Object.entries(planned)) if (Number(d) >= plannedFrom) plannedTotal += q;
@@ -913,7 +969,7 @@ const Row = memo(function Row({ row, orig, dayList, canWrite, editingField, onEd
       <td className={cx(td, "text-right text-text-muted")} title={t.current < 0 ? "현재고가 음수라 PT 수를 계산하지 않습니다" : undefined}>
         {t.pallets === null || t.current < 0 ? (t.current < 0 ? "–" : "") : fmtInt(t.pallets)}
       </td>
-      <td className={cx(td, "text-left", productDirty && DIRTY)}>
+      <td className={cx(td, "text-left", productDirty ? DIRTY : justLinked ? "bg-ok-bg" : "")} data-linked={linkedName ? "true" : "false"}>
         {canWrite && picking ? (
           <div className="w-[180px] whitespace-normal">
             <ProductCombobox
@@ -935,10 +991,10 @@ const Row = memo(function Row({ row, orig, dayList, canWrite, editingField, onEd
             aria-label={`${row.name} 계획 제품: ${linkedName ?? "연결 안 함"}`}
             onClick={() => setPicking(true)}
           >
-            {linkedName ?? <span className="text-text-faint">연결 안 함</span>}
+            {linkedName ? <LinkedName name={linkedName} just={justLinked} /> : <span className="text-text-faint">연결 안 함</span>}
           </button>
         ) : (
-          (linkedName ?? <span className="text-text-faint">–</span>)
+          (linkedName ? <LinkedName name={linkedName} just={justLinked} /> : <span className="text-text-faint">–</span>)
         )}
       </td>
       {dayList.map((d) => (

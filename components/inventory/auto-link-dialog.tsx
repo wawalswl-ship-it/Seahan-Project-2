@@ -25,17 +25,41 @@ const KIND: Record<MatchProposal["kind"], { label: string; tone: "ok" | "info" |
  * 확실한 제안(자동·윗 품목과 동일)은 처음부터 체크돼 있고, 애매한 것은 체크가 풀려 있다.
  * 「보이는 것 모두 체크」도 애매한 것(골라 주세요)은 건드리지 않는다. 그것들은 사람이 하나씩 체크해야만 연결된다.
  */
-export function AutoLinkDialog({ yearMonth, items, products, onClose, onDone }: { yearMonth: string; items: AutoLinkItem[]; products: ComboProduct[]; onClose: () => void; onDone: (notice: string) => void }) {
+export function AutoLinkDialog({
+  yearMonth,
+  items,
+  products,
+  justLinked,
+  notice,
+  onClose,
+  onDone,
+}: {
+  yearMonth: string;
+  items: AutoLinkItem[];
+  products: ComboProduct[];
+  /** 방금 이 창에서 연결한 품목. 연결한 뒤에도 목록에 남겨 초록색으로 보여준다 */
+  justLinked?: Set<string>;
+  /** 방금 연결한 결과 안내 */
+  notice?: string | null;
+  onClose: () => void;
+  onDone: (notice: string, linkedIds: string[]) => void }) {
   const result = useMemo(() => proposeProductLinks(items.map((i) => ({ key: i.id, name: i.name, productId: i.productId })), products), [items, products]);
   const itemById = useMemo(() => new Map(items.map((i) => [i.id, i] as const)), [items]);
   const [choice, setChoice] = useState<Record<string, string>>(() => Object.fromEntries(result.proposals.map((p) => [p.key, p.productId])));
   const [checked, setChecked] = useState<Set<string>>(() => new Set(result.proposals.filter((p) => p.kind !== "candidates").map((p) => p.key)));
-  const [filter, setFilter] = useState<"all" | MatchProposal["kind"]>("all");
+  const [filter, setFilter] = useState<"all" | "linked" | MatchProposal["kind"]>(() => (justLinked?.size ? "linked" : "all"));
+  const productName = useMemo(() => new Map(products.map((p) => [p.id, p.name] as const)), [products]);
+  /** 이미 연결된 품목. 방금 연결한 것을 맨 위에 둔다 */
+  const linkedItems = useMemo(() => {
+    const list = items.filter((i) => i.productId);
+    return [...list.filter((i) => justLinked?.has(i.id)), ...list.filter((i) => !justLinked?.has(i.id))];
+  }, [items, justLinked]);
+  const showLinked = filter === "all" || filter === "linked";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const count = (k: MatchProposal["kind"]) => result.proposals.filter((p) => p.kind === k).length;
-  const shown = filter === "all" ? result.proposals : result.proposals.filter((p) => p.kind === filter);
+  const shown = filter === "all" ? result.proposals : filter === "linked" ? [] : result.proposals.filter((p) => p.kind === filter);
   const selected = result.proposals.filter((p) => checked.has(p.key) && choice[p.key]);
 
   const toggle = (key: string, on: boolean) =>
@@ -52,7 +76,7 @@ export function AutoLinkDialog({ yearMonth, items, products, onClose, onDone }: 
     const res = await linkStockItems({ yearMonth, links: selected.map((p) => ({ id: p.key, productId: choice[p.key] })) });
     setBusy(false);
     if (!res.ok) return setError(res.error);
-    onDone(`품목 ${res.data.linked}개를 생산계획 제품에 연결했습니다. 수급 검증용 재고 ${res.data.snapshots}건을 다시 맞췄습니다.`);
+    onDone(`품목 ${res.data.linked}개를 생산계획 제품에 연결했습니다. 수급 검증용 재고 ${res.data.snapshots}건을 다시 맞췄습니다.`, selected.filter((p) => choice[p.key]).map((p) => p.key));
   }
 
   return (
@@ -63,15 +87,19 @@ export function AutoLinkDialog({ yearMonth, items, products, onClose, onDone }: 
           수불표 품목을 생산계획 제품과 연결해야 그 재고가 수급 검증·순 소요량·생산 예정에 쓰입니다. 품명이 조금 달라도(단위 생략, 낱말 순서, 색 이름 한글·영문, 뒤에 붙은 구분) 같은 제품을 찾아 제안합니다. <b>체크한 것만</b> 연결됩니다. 「골라 주세요」 항목은 「모두 체크」에 포함되지 않으니, 제품을 확인하고 하나씩 직접 체크하세요.
         </p>
 
+        {notice ? (
+          <p className="mt-3 rounded-[var(--radius-sm)] border border-ok/30 bg-ok-bg px-3 py-2 text-xs font-medium text-ok" data-testid="autolink-notice">
+            ✓ {notice}
+          </p>
+        ) : null}
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs" data-testid="autolink-summary">
-          <Badge tone="neutral">이미 연결 {result.linked}</Badge>
-          {(["all", "auto", "parent", "candidates"] as const).map((k) => (
+          {(["all", "linked", "auto", "parent", "candidates"] as const).map((k) => (
             <button
               key={k}
               onClick={() => setFilter(k)}
               className={cx("rounded-full border px-2.5 py-0.5", filter === k ? "border-brand bg-brand text-white" : "border-border bg-white text-text-muted hover:bg-bg-sub")}
             >
-              {k === "all" ? `제안 전체 ${result.proposals.length}` : `${KIND[k].label} ${count(k)}`}
+              {k === "all" ? `전체 ${result.proposals.length + linkedItems.length}` : k === "linked" ? `✓ 연결됨 ${linkedItems.length}` : `${KIND[k].label} ${count(k)}`}
             </button>
           ))}
           <Badge tone="surplus" title="생산계획 제품 목록에 비슷한 이름이 없는 품목입니다. 2-Stage·PE 제품처럼 지금 계획 대상이 아닌 품목이 여기에 들어갑니다">
@@ -101,8 +129,8 @@ export function AutoLinkDialog({ yearMonth, items, products, onClose, onDone }: 
         </div>
 
         <div className="mt-3 min-h-0 flex-1 overflow-auto rounded-[var(--radius-sm)] border border-border">
-          {shown.length === 0 ? (
-            <p className="p-6 text-center text-xs text-text-muted">{result.proposals.length === 0 ? "새로 제안할 연결이 없습니다." : "이 종류의 제안이 없습니다."}</p>
+          {shown.length === 0 && !(showLinked && linkedItems.length) ? (
+            <p className="p-6 text-center text-xs text-text-muted">{filter === "linked" ? "아직 연결된 품목이 없습니다." : result.proposals.length === 0 ? "새로 제안할 연결이 없습니다." : "이 종류의 제안이 없습니다."}</p>
           ) : (
             <table className="w-full border-separate border-spacing-0 text-xs" data-testid="autolink-table">
               <thead className="sticky top-0 z-10 bg-bg-sub text-left text-[11px] text-text-muted">
@@ -110,7 +138,7 @@ export function AutoLinkDialog({ yearMonth, items, products, onClose, onDone }: 
                   <th className="w-8 border-b border-border px-2 py-1.5" />
                   <th className="border-b border-border px-2 py-1.5 font-semibold">수불표 품목</th>
                   <th className="border-b border-border px-2 py-1.5 font-semibold">구분</th>
-                  <th className="w-[320px] border-b border-border px-2 py-1.5 font-semibold">연결할 생산계획 제품 (바꿀 수 있음)</th>
+                  <th className="w-[320px] border-b border-border px-2 py-1.5 font-semibold">생산계획 제품 (제안은 바꿀 수 있음)</th>
                 </tr>
               </thead>
               <tbody>
@@ -146,6 +174,27 @@ export function AutoLinkDialog({ yearMonth, items, products, onClose, onDone }: 
                     </tr>
                   );
                 })}
+                {showLinked
+                  ? linkedItems.map((it) => {
+                      const just = Boolean(justLinked?.has(it.id));
+                      return (
+                        <tr key={it.id} className={just ? "bg-ok-bg" : ""} data-linked-row={just ? "just" : "old"}>
+                          <td className="border-b border-border px-2 py-1 text-center font-bold text-ok">✓</td>
+                          <td className="border-b border-border px-2 py-1">
+                            <div className="font-medium text-text">{it.name}</div>
+                            <div className="text-[11px] text-text-faint">
+                              {it.section || "–"} · {it.machineLabel || "–"}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap border-b border-border px-2 py-1">
+                            <Badge tone="ok">연결됨</Badge>
+                            {just ? <span className="ml-1 rounded-full bg-ok px-1.5 py-px text-[10px] font-bold text-white">방금 연결</span> : null}
+                          </td>
+                          <td className="border-b border-border px-2 py-1 font-medium text-ok">{productName.get(it.productId as string) ?? "(삭제된 제품)"}</td>
+                        </tr>
+                      );
+                    })
+                  : null}
               </tbody>
             </table>
           )}
